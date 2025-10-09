@@ -1,0 +1,24 @@
+[project]
+name = "llm-airlineai"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Chris T.",email = "developers@hostright.info"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openai (>=2.2.0,<3.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "llm_airlineai", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "dotenv (>=0.9.9,<0.10.0)",
+]
