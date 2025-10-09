@@ -10,12 +10,13 @@
 # output: best beal
 # considerations: is the user flexible on airline/plane type/dates? expand search if yes
 
-import sys, atexit, logging, logging.handlers
+import os, sys, atexit, logging, logging.handlers
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
 from openai.types.conversations import Conversation
+import amadeus
 import streamlit as st
 
 def setup_logging() -> logging.Logger:
@@ -74,6 +75,11 @@ def chat(message: str, conv_id: str) -> str:
     logger.debug(f'chat response from openAI: {_response}')
     _output: str = _response.output_text
     return _output
+
+amadeus = amadeus.Client(
+    client_id=os.environ['AMADEUS_API_KEY']
+    client_secret=os.environ['AMADEUS_API_SECRET']
+)
 
 def cleanup() -> None:
     if 'conversation_id' in st.session_state and st.session_state.conversation_id:

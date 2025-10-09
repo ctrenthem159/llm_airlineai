@@ -26,6 +26,17 @@ doc = ["docutils", "jinja2", "myst-parser", "numpydoc", "pillow (>=9,<10)", "pyd
 save = ["vl-convert-python (>=1.7.0)"]
 
 [[package]]
+name = "amadeus"
+version = "12.0.0"
+description = "Python module for the Amadeus travel APIs"
+optional = false
+python-versions = ">=3.4.8"
+groups = ["main"]
+files = [
+    {file = "amadeus-12.0.0.tar.gz", hash = "sha256:80d4b844cdfc2ada937061949b04527b0c2fe229d276eeb554b78ef778b053a5"},
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 description = "Reusable constraint types to use with typing.Annotated"
@@ -1707,4 +1718,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13"
-content-hash = "6859f16da397f1f10ef716eefa690ea5b70e70cf53b6b298ea9ff7c8e4fc5736"
+content-hash = "fd370c90ba9c76d33eea4aa70a4a11b6b7be5ea4fe0983fc298dd74efd25cf78"
