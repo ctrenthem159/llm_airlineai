@@ -1,4 +1,3 @@
-# TODO hook Amadeus API for flight prices
 # TODO hook Aviationstack API for flight records
 # TODO build openAI tool to talk to Amadeus
 # TODO implement Redis for AI
@@ -10,13 +9,13 @@
 # output: best beal
 # considerations: is the user flexible on airline/plane type/dates? expand search if yes
 
-import os, sys, atexit, logging, logging.handlers
-from datetime import datetime, timezone
+import sys, atexit, logging, logging.handlers
+from datetime import date, datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
 from openai.types.conversations import Conversation
-import amadeus
+from amadeus import Client, Location, ResponseError
 import streamlit as st
 
 def setup_logging() -> logging.Logger:
@@ -52,6 +51,7 @@ load_dotenv()
 client = OpenAI()
 MODEL: str = "gpt-4.1-nano"
 SYSTEMPROMPT: str = "You are a customer service agent for a travel agency. Provide customers with friendly, helpful service to find the best flight deals for their upcoming trip. Using the user's city combination and intended travel date, look for the best possible flight deal. If you cannot find the information, say you do not know and suggest that the user consider different dates or cities."
+amadeus = Client()
 
 def new_chat() -> str:
     _conversation: Conversation = client.conversations.create(
@@ -76,10 +76,62 @@ def chat(message: str, conv_id: str) -> str:
     _output: str = _response.output_text
     return _output
 
-amadeus = amadeus.Client(
-    client_id=os.environ['AMADEUS_API_KEY']
-    client_secret=os.environ['AMADEUS_API_SECRET']
-)
+def get_airport_id(search_term: str) -> str | None:
+    try:
+        res = amadeus.reference_data.locations.get(
+            subType = Location.ANY,
+            keyword = search_term,
+            view = 'LIGHT'
+        )
+        locations = res.data
+        if locations:
+            logger.info(f'Found {len(locations)} matching {search_term}')
+            logger.info(f'Using IATA Code {locations[0]['iataCode']} for {locations[0]['name']}')
+            return locations[0]['iataCode']
+        else:
+            raise ValueError(f'No results found for search {search_term}')
+    except ResponseError as e:
+        logger.error(f'An error with Amadeus occured: {e}')
+    except Exception as e:
+        logger.error(f'An unexpected error occured: {e}')
+
+def get_flights(start_city: str, destination_city: str, departure_date: str = date.today().isoformat()):
+    try:
+        res = amadeus.shopping.flight_offers_search.get(
+            originLocationCode = start_city,
+            destinationLocationCode = destination_city,
+            departureDate = departure_date,
+            adults = 1
+        )
+        logger.debug(f'Flight API response: {res}')
+
+        cheapest_flight = None
+        min_price = float('inf')
+        flight_data = res.data
+
+        for offer in flight_data:
+            current_price = float(offer['price']['total'])
+            if current_price < min_price:
+                min_price = current_price
+                cheapest_flight = offer
+
+        if cheapest_flight:
+            first_segment = cheapest_flight['itineraries'][0]['segments'][0]
+            total_duration = cheapest_flight['itineraries'][0]['duration']
+
+            return {
+                'carrier_code': first_segment.get('carrierCode'),
+                'flight_number': first_segment.get('number'),
+                'airplane_id': first_segment.get('aircraft', {}).get('code'),
+                'price_total': cheapest_flight['price']['total'],
+                'price_currency': cheapest_flight['price']['currency'],
+                'duration': total_duration
+            }
+
+    except ResponseError as e:
+        logger.error(f'An error with Amadeus occured: {e}')
+    except Exception as e:
+        logger.error(f'An unexpected error occured: {e}')
 
 def cleanup() -> None:
     if 'conversation_id' in st.session_state and st.session_state.conversation_id:
