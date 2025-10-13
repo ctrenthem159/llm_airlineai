@@ -9,7 +9,8 @@
 # output: best beal
 # considerations: is the user flexible on airline/plane type/dates? expand search if yes
 
-import sys, atexit, logging, logging.handlers
+import sys, atexit, json, logging, logging.handlers
+from typing import Any
 from datetime import date, datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -23,35 +24,76 @@ def setup_logging() -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     _log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    _log_file_handler = logging.handlers.TimedRotatingFileHandler(
-    '.log',
-    when='midnight',
-    interval=1,
-    backupCount=7,
-    encoding='utf-8'
-    )
-    _log_file_handler.setLevel(logging.DEBUG)
-    _log_file_handler.setFormatter(_log_formatter)
-    logger.addHandler(_log_file_handler)
+    if not logger.handlers:
+        _log_file_handler = logging.handlers.TimedRotatingFileHandler(
+        '.log',
+        when='midnight',
+        interval=1,
+        backupCount=7,
+        encoding='utf-8'
+        )
+        _log_file_handler.setLevel(logging.DEBUG)
+        _log_file_handler.setFormatter(_log_formatter)
+        logger.addHandler(_log_file_handler)
 
-    _log_console_handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
-    _log_console_handler.setLevel(logging.INFO)
-    _log_console_handler.setFormatter(_log_formatter)
-    logger.addHandler(_log_console_handler)
+        _log_console_handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
+        _log_console_handler.setLevel(logging.INFO)
+        _log_console_handler.setFormatter(_log_formatter)
+        logger.addHandler(_log_console_handler)
 
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.INFO)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("openai").setLevel(logging.INFO)
     return logger
 
 logger: logging.Logger = setup_logging()
 SERVER_STARTTIME: datetime = datetime.now(timezone.utc)
 
 load_dotenv()
+amadeus = Client()
 client = OpenAI()
 MODEL: str = "gpt-4.1-nano"
-SYSTEMPROMPT: str = "You are a customer service agent for a travel agency. Provide customers with friendly, helpful service to find the best flight deals for their upcoming trip. Using the user's city combination and intended travel date, look for the best possible flight deal. If you cannot find the information, say you do not know and suggest that the user consider different dates or cities."
-amadeus = Client()
+SYSTEMPROMPT: str = "You are a travel agent chatbot. Your primary goal is to help users find flight deals. IMPORTANT RULE: Before you can search for flights using the 'get_flights' tool, you MUST first translate all specified city names (origin and destination) into their 3-letter IATA codes using the 'get_city' tool. If a user provides a city name, use 'get_city' immediately. The 'get_flights' tool requires IATA codes and an optional departure date (YYYY-MM-DD format). If information is missing or cannot be found, ask the user for clarification."
+TOOLS = [
+    {
+        'type': 'function',
+        'name': 'get_city',
+        'description': 'Search a cities database and return the IATA code for a given city.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'search_term': {
+                    'type': 'string',
+                    'description': 'A city name or other search term.'
+                },
+            },
+            'required': ['search_term'],
+        },
+    },
+    {
+        'type': 'function',
+        'name': 'get_flights',
+        'description': 'Search for the cheapest flight between two cities.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'start_city': {
+                    'type': 'string',
+                    'description': 'The starting city for the trip.'
+                },
+                'destination_city': {
+                    'type': 'string',
+                    'description': 'The destination for the trip.'
+                },
+                'departure_date': {
+                    'type': 'string',
+                    'description': 'The date of the flight, using ISO format `YYYY-MM-DD`'
+                },
+            },
+            'required': ['start_city', 'destination_city'],
+        },
+    },
+]
 
 def new_chat() -> str:
     _conversation: Conversation = client.conversations.create(
@@ -65,19 +107,68 @@ def end_chat(conversation: str) -> None:
     logger.debug(f'Conversation {conversation} deleted successfully.')
 
 def chat(message: str, conv_id: str) -> str:
-    _input: ResponseInputParam = [{'role': 'user', 'content': message}]
+    _tool_called: bool = False
+    _current_date = date.today().isoformat()
+    _input: ResponseInputParam = [{'role': 'system', 'content': f'The current date is {_current_date}. Ensure the departure date is today or later.'}, {'role': 'user', 'content': message}]
     logger.debug(f'chat input: {_input}')
     _response: Response = client.responses.create(
         conversation = conv_id,
         model = MODEL,
+        tools = TOOLS,
         input = _input
         )
     logger.debug(f'chat response from openAI: {_response}')
-    _output: str = _response.output_text
+    for item in _response.output:
+        if item.type == 'function_call':
+            _tool_called = True
+            logger.debug(f' OpenAI Function Call: {item}')
+            arguments = json.loads(item.arguments)
+            logger.debug(f'Function arguments: {arguments}')
+            if item.name == 'get_city':
+                city = get_city(arguments.get('search_term'))
+                client.conversations.items.create(
+                    conv_id,
+                    items = [{
+                        'type': 'function_call_output',
+                        'call_id': item.call_id,
+                        'output': json.dumps({'city_code': city})
+                    }]
+                )
+            if item.name == 'get_flights':
+                flight = get_flights(**arguments)
+                client.conversations.items.create(
+                    conv_id,
+                    items = [{
+                        'type': 'function_call_output',
+                        'call_id': item.call_id,
+                        'output': json.dumps({'flight': flight}),
+                    }]
+                )
+
+    if _tool_called:
+        logger.debug("Tool was called, generating new response.")
+
+        _response_second: Response = client.responses.create(
+            conversation = conv_id,
+            model = MODEL,
+            tools = TOOLS,
+            input = []
+        )
+        logger.debug(f'second chat response from openAI: {_response_second}')
+        _output: str = _response_second.output_text
+    else:
+        _output: str = _response.output_text
+
     return _output
 
-def get_airport_id(search_term: str) -> str | None:
+def get_city(search_term: str) -> str | None:
     try:
+        # Validate search term input
+        if not search_term or len(search_term.strip()) < 3:
+            logger.warning(f'Search term {search_term} invalid.')
+            return None
+
+        logger.debug(f'Airport search requested: {search_term}')
         res = amadeus.reference_data.locations.get(
             subType = Location.ANY,
             keyword = search_term,
@@ -97,11 +188,26 @@ def get_airport_id(search_term: str) -> str | None:
 
 def get_flights(start_city: str, destination_city: str, departure_date: str = date.today().isoformat()):
     try:
+        today = date.today()
+        try:
+            input_date = date.fromisoformat(departure_date)
+        except ValueError:
+            logger.error(f"Invalid date format received: {departure_date}. Using today's date.")
+            input_date = today
+
+        # Check if the date is in the past. If so, override it.
+        if input_date < today:
+            logger.warning(f"Model provided past date: {departure_date}. Overriding with current date: {today.isoformat()}")
+            validated_date_iso = today.isoformat()
+        else:
+            validated_date_iso = input_date.isoformat()
+
         res = amadeus.shopping.flight_offers_search.get(
             originLocationCode = start_city,
             destinationLocationCode = destination_city,
-            departureDate = departure_date,
-            adults = 1
+            departureDate = validated_date_iso,
+            adults = 1,
+            currencyCode = 'USD'
         )
         logger.debug(f'Flight API response: {res}')
 
