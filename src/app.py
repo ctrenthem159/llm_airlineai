@@ -1,14 +1,3 @@
-# TODO hook Aviationstack API for flight records
-# TODO build openAI tool to talk to Amadeus
-# TODO implement Redis for AI
-# TODO implement deployment
-
-# OpenAI
-# user input: start & end cities
-# tools: amadeus and aviationstack apis
-# output: best beal
-# considerations: is the user flexible on airline/plane type/dates? expand search if yes
-
 import sys, atexit, json, logging, logging.handlers
 from typing import Any
 from datetime import date, datetime, timezone
@@ -20,6 +9,7 @@ from amadeus import Client, Location, ResponseError
 import streamlit as st
 
 def setup_logging() -> logging.Logger:
+    """ Initalize logger in the console and .log file. """
     logger: logging.Logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     _log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -96,6 +86,11 @@ TOOLS = [
 ]
 
 def new_chat() -> str:
+    """ Create a new conversation to keep track of inputs & responses.
+
+    Returns:
+        The unique ID for this session.
+    """
     _conversation: Conversation = client.conversations.create(
         items=[{'type': 'message', 'role': 'system', 'content': SYSTEMPROMPT}]
     )
@@ -103,10 +98,28 @@ def new_chat() -> str:
     return _conversation.id
 
 def end_chat(conversation: str) -> None:
+    """ Deletes the current conversation by ID number.
+
+    Args:
+        conversation: The unique ID for the conversation session.
+    """
     client.conversations.delete(conversation)
     logger.debug(f'Conversation {conversation} deleted successfully.')
 
 def chat(message: str, conv_id: str) -> str:
+    """ Handles the core chat logic, including API calls and tool management.
+
+    The function ensures the model has today's date along with the user's request and sends the request to OpenAI.
+    Upon receiving a response, the function will call necessary tools and eventually takes the AI's response and
+    returns it to the frontend.
+
+    Args:
+        message: The user's input message.
+        conv_id: The unique ID for the conversation session.
+
+    Returns:
+        The model's response as text.
+    """
     _tool_called: bool = False
     _current_date = date.today().isoformat()
     _input: ResponseInputParam = [{'role': 'system', 'content': f'The current date is {_current_date}. Ensure the departure date is today or later.'}, {'role': 'user', 'content': message}]
@@ -162,6 +175,16 @@ def chat(message: str, conv_id: str) -> str:
     return _output
 
 def get_city(search_term: str) -> str | None:
+    """
+    Accepts a search term from the chat session and looks up the correct IATA code for that city.
+    Uses Amadeus Airport & Cities Search API to find the most relevant code.
+
+    Args:
+        search_term: A string provided by the user or model.
+
+    Returns:
+        location: The IATA code pulled from the first result of the search.
+    """
     try:
         # Validate search term input
         if not search_term or len(search_term.strip()) < 3:
@@ -187,6 +210,18 @@ def get_city(search_term: str) -> str | None:
         logger.error(f'An unexpected error occured: {e}')
 
 def get_flights(start_city: str, destination_city: str, departure_date: str = date.today().isoformat()):
+    """
+    Finds the cheapest flight between two cities and submits the key data on that flight back to the model.
+
+    Args:
+        start_city: An IATA code representing the takeoff location (city or airport).
+        destination_city: An IATA code representing the destination.
+        departure_date: An optional input to select a specific date for the flight. Defaults to today's date if not provided.
+            Date must be presented in ISO format (YYYY-MM-DD).
+
+    Returns:
+        flight: A dictionary response containing the airline, flight number, aircraft model, flight duration, and lowest ticket price.
+    """
     try:
         today = date.today()
         try:
@@ -240,6 +275,9 @@ def get_flights(start_city: str, destination_city: str, departure_date: str = da
         logger.error(f'An unexpected error occured: {e}')
 
 def cleanup() -> None:
+    """
+    Helper function to end the conversation session and ensure everything is properly closed out.
+    """
     if 'conversation_id' in st.session_state and st.session_state.conversation_id:
         try:
             end_chat(st.session_state.conversation_id)
