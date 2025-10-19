@@ -120,59 +120,54 @@ def chat(message: str, conv_id: str) -> str:
     Returns:
         The model's response as text.
     """
-    _tool_called: bool = False
     _current_date = date.today().isoformat()
     _input: ResponseInputParam = [{'role': 'system', 'content': f'The current date is {_current_date}. Ensure the departure date is today or later.'}, {'role': 'user', 'content': message}]
-    logger.debug(f'chat input: {_input}')
-    _response: Response = client.responses.create(
-        conversation = conv_id,
-        model = MODEL,
-        tools = TOOLS,
-        input = _input
-        )
-    logger.debug(f'chat response from openAI: {_response}')
-    for item in _response.output:
-        if item.type == 'function_call':
-            _tool_called = True
-            logger.debug(f' OpenAI Function Call: {item}')
-            arguments = json.loads(item.arguments)
-            logger.debug(f'Function arguments: {arguments}')
-            if item.name == 'get_city':
-                city = get_city(arguments.get('search_term'))
-                client.conversations.items.create(
-                    conv_id,
-                    items = [{
-                        'type': 'function_call_output',
-                        'call_id': item.call_id,
-                        'output': json.dumps({'city_code': city})
-                    }]
-                )
-            if item.name == 'get_flights':
-                flight = get_flights(**arguments)
-                client.conversations.items.create(
-                    conv_id,
-                    items = [{
-                        'type': 'function_call_output',
-                        'call_id': item.call_id,
-                        'output': json.dumps({'flight': flight}),
-                    }]
-                )
-
-    if _tool_called:
-        logger.debug("Tool was called, generating new response.")
-
-        _response_second: Response = client.responses.create(
+    while True:
+        logger.debug(f'chat input: {_input}')
+        _response: Response = client.responses.create(
             conversation = conv_id,
             model = MODEL,
             tools = TOOLS,
-            input = []
-        )
-        logger.debug(f'second chat response from openAI: {_response_second}')
-        _output: str = _response_second.output_text
-    else:
-        _output: str = _response.output_text
+            input = _input
+            )
+        logger.debug(f'chat response from openAI: {_response}')
 
-    return _output
+        if _response.output_text:
+            return _response.output_text
+
+        _tool_called: bool = False
+        _input = []
+
+        for item in _response.output:
+            if item.type == 'function_call':
+                _tool_called = True
+                logger.debug(f' OpenAI Function Call: {item}')
+                arguments = json.loads(item.arguments)
+                logger.debug(f'Function arguments: {arguments}')
+                if item.name == 'get_city':
+                    city = get_city(arguments.get('search_term'))
+                    client.conversations.items.create(
+                        conv_id,
+                        items = [{
+                            'type': 'function_call_output',
+                            'call_id': item.call_id,
+                            'output': json.dumps({'city_code': city})
+                        }]
+                    )
+                if item.name == 'get_flights':
+                    flight = get_flights(**arguments)
+                    client.conversations.items.create(
+                        conv_id,
+                        items = [{
+                            'type': 'function_call_output',
+                            'call_id': item.call_id,
+                            'output': json.dumps({'flight': flight}),
+                        }]
+                    )
+
+        if not _tool_called:
+            logger.error('Model did not provide text or a tool call.')
+            return 'Sorry, I ran into an error and can\'t complete your request.'
 
 def get_city(search_term: str) -> str | None:
     """

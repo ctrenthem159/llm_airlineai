@@ -1,0 +1,15 @@
+{
+	"name": "Python 3.13 with Poetry",
+	"image": "python:3.13",
+	"features": {
+		"ghcr.io/devcontainers-extra/features/poetry:2": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance"
+			]
+		}
+	}
+}
